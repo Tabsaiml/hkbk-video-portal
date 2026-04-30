@@ -3,21 +3,44 @@
 //  Run: node server.js  →  http://localhost:5500
 // ================================================================
 
-const express  = require('express');
-const multer   = require('multer');
-const Datastore = require('@seald-io/nedb');
-const path     = require('path');
-const fs       = require('fs');
-const bcrypt   = require('bcryptjs');
+const express    = require('express');
+const multer     = require('multer');
+const Datastore  = require('@seald-io/nedb');
+const path       = require('path');
+const fs         = require('fs');
+const bcrypt     = require('bcryptjs');
+const nodemailer = require('nodemailer');
 const { v4: uuidv4 } = require('uuid');
 
 const app  = express();
 const PORT = 5500;
 
+// ── Email config — swap to college SMTP when ready ───────────────
+const EMAIL_CONFIG = {
+  host    : 'smtp.gmail.com',   // Change to: mail.hkbk.edu.in
+  port    : 587,                // Change to college port if needed
+  secure  : false,              // true for port 465
+  user    : 'hod.aiml@hkbk.edu.in',
+  pass    : 'mrhinafzkhcekzgo',
+  from    : '"HKBK Video Library" <hod.aiml@hkbk.edu.in>'
+};
+
+// ── Email transporter ────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  host             : EMAIL_CONFIG.host,
+  port             : EMAIL_CONFIG.port,
+  secure           : EMAIL_CONFIG.secure,
+  auth             : { user: EMAIL_CONFIG.user, pass: EMAIL_CONFIG.pass },
+  connectionTimeout: 4000,   // fail after 4 seconds
+  greetingTimeout  : 4000,
+  socketTimeout    : 4000,
+});
+
 // ── Databases ────────────────────────────────────────────────────
 const videosDB  = new Datastore({ filename: './data/videos.db',  autoload: true });
 const usersDB   = new Datastore({ filename: './data/users.db',   autoload: true });
 const sessionsDB = new Datastore({ filename: './data/sessions.db', autoload: true });
+const otpDB     = new Datastore({ filename: './data/otps.db',    autoload: true });
 
 usersDB.ensureIndex({ fieldName: 'email', unique: true });
 
@@ -47,6 +70,7 @@ const upload = multer({
 
 // ── Middleware ────────────────────────────────────────────────────
 app.use(express.json());
+app.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 app.use(express.static('public'));
 
 // ── Auth helpers ─────────────────────────────────────────────────
@@ -76,7 +100,127 @@ function requireAdmin(req, res, next) {
   });
 }
 
+// ── Email helpers ────────────────────────────────────────────────
+
+// Detect role from email pattern
+function detectRole(email) {
+  const local = email.split('@')[0].toLowerCase();
+  // Students: 1hk23AI004, 1hk24CS045 — starts with 1hk + 2 digits
+  if (/^1hk\d{2}/.test(local)) return 'student';
+  // Faculty/employees: dean.iic, principal, afreenk.aiml
+  return 'faculty';
+}
+
+// Validate only @hkbk.edu.in emails allowed
+function isHKBKEmail(email) {
+  return email.toLowerCase().endsWith('@hkbk.edu.in');
+}
+
+// Generate 6-digit OTP
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Send OTP email
+async function sendOTPEmail(email, otp, name) {
+  const role = detectRole(email);
+  const roleText = role === 'student' ? 'Student' : 'Faculty/Staff';
+  await transporter.sendMail({
+    from   : EMAIL_CONFIG.from,
+    to     : email,
+    subject: 'HKBK Video Library — Email Verification Code',
+    html   : `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#f5f5f5;padding:20px;border-radius:10px">
+        <div style="background:#1565c0;padding:20px;border-radius:8px 8px 0 0;text-align:center">
+          <h2 style="color:#fff;margin:0">🎬 HKBK Video Library</h2>
+        </div>
+        <div style="background:#fff;padding:28px;border-radius:0 0 8px 8px">
+          <p style="color:#333;font-size:15px">Hello <b>${name}</b>,</p>
+          <p style="color:#555;font-size:14px">Your verification code for <b>${roleText}</b> account registration is:</p>
+          <div style="background:#f0f4ff;border:2px dashed #1565c0;border-radius:8px;padding:20px;text-align:center;margin:20px 0">
+            <span style="font-size:36px;font-weight:800;letter-spacing:10px;color:#1565c0">${otp}</span>
+          </div>
+          <p style="color:#888;font-size:12px">This code expires in <b>10 minutes</b>. Do not share it with anyone.</p>
+          <p style="color:#888;font-size:12px">If you did not request this, ignore this email.</p>
+        </div>
+      </div>`
+  });
+}
+
 // ── AUTH ROUTES ──────────────────────────────────────────────────
+
+// Send OTP — step 1 of registration
+app.post('/api/send-otp', async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ error: 'All fields required' });
+  if (!isHKBKEmail(email)) return res.status(400).json({ error: 'Only @hkbk.edu.in email addresses are allowed' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+  // Check if email already registered
+  usersDB.findOne({ email: email.trim().toLowerCase() }, async (err, existing) => {
+    if (existing) return res.status(400).json({ error: 'Email already registered' });
+
+    const otp     = generateOTP();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Save OTP with registration details
+    otpDB.remove({ email: email.toLowerCase() }, { multi: true }, () => {
+      otpDB.insert({ email: email.toLowerCase(), otp, name: name.trim(), password, expires }, async (e) => {
+        if (e) return res.status(500).json({ error: 'Server error' });
+        // Print OTP to terminal (remove this after email is configured)
+        console.log(`\n📧 OTP for ${email}: ${otp}\n`);
+        try {
+          await sendOTPEmail(email, otp, name.trim());
+        } catch (mailErr) {
+          console.log('Email send failed (use OTP from terminal above):', mailErr.message);
+        }
+        res.json({ success: true, message: `Verification code sent to ${email}` });
+      });
+    });
+  });
+});
+
+// Verify OTP — step 2 of registration
+app.post('/api/verify-otp', (req, res) => {
+  const { email, otp } = req.body;
+  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
+
+  otpDB.findOne({ email: email.toLowerCase(), otp }, (err, record) => {
+    if (err || !record) return res.status(400).json({ error: 'Invalid verification code' });
+    if (new Date() > new Date(record.expires)) {
+      otpDB.remove({ email: email.toLowerCase() }, { multi: true }, () => {});
+      return res.status(400).json({ error: 'Verification code expired. Please register again.' });
+    }
+
+    // OTP valid — create user account
+    bcrypt.hash(record.password, 10, (e, hash) => {
+      if (e) return res.status(500).json({ error: 'Server error' });
+      const role     = detectRole(email);
+      const canUpload = role === 'faculty';
+      const user = {
+        _id      : uuidv4(),
+        name     : record.name,
+        email    : email.toLowerCase(),
+        password : hash,
+        role     : 'user',
+        userType : role,         // 'student' or 'faculty'
+        canUpload: canUpload,
+        status   : 'pending',   // admin must approve
+        createdAt: new Date()
+      };
+      usersDB.insert(user, (insertErr) => {
+        if (insertErr) return res.status(400).json({ error: 'Email already registered' });
+        otpDB.remove({ email: email.toLowerCase() }, { multi: true }, () => {});
+        res.json({
+          success : true,
+          pending : true,
+          userType: role,
+          message : `Email verified! Your ${role} account is awaiting admin approval.`
+        });
+      });
+    });
+  });
+});
 
 // Register
 app.post('/api/register', (req, res) => {
@@ -125,7 +269,14 @@ app.post('/api/logout', (req, res) => {
 
 // Me
 app.get('/api/me', requireAuth, (req, res) => {
-  res.json({ _id: req.user._id, name: req.user.name, email: req.user.email, role: req.user.role });
+  res.json({
+    _id      : req.user._id,
+    name     : req.user.name,
+    email    : req.user.email,
+    role     : req.user.role,
+    userType : req.user.userType || 'faculty',
+    canUpload: req.user.canUpload !== false
+  });
 });
 
 // Admin: get all users
@@ -136,7 +287,13 @@ app.get('/api/users', requireAdmin, (req, res) => {
   });
 });
 
-// Admin: get pending users
+// Admin: get pending users (two routes for compatibility)
+app.get('/api/users/pending', requireAdmin, (req, res) => {
+  usersDB.find({ status: 'pending' }).sort({ createdAt: -1 }).exec((err, users) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ users: users.map(u => ({ _id: u._id, name: u.name, email: u.email, userType: u.userType || 'faculty', createdAt: u.createdAt })) });
+  });
+});
 app.get('/api/pending-users', requireAdmin, (req, res) => {
   usersDB.find({ status: 'pending' }).sort({ createdAt: -1 }).exec((err, users) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -195,9 +352,10 @@ app.get('/stream/:filename', (req, res, next) => {
 
 // ── VIDEO ROUTES ─────────────────────────────────────────────────
 
-// Upload
+// Upload — faculty and admin only
 app.post('/api/upload', requireAuth, upload.single('video'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No video file' });
+  if (req.user.userType === 'student') return res.status(403).json({ error: 'Students can only watch videos. Upload is for faculty only.' });
   const { title, description, topic } = req.body;
   if (!title) return res.status(400).json({ error: 'Title required' });
 

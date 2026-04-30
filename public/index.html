@@ -189,30 +189,52 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#0f0f0f;color:#fff;min-h
     <div id="loginForm">
       <div class="form-group">
         <label>Email</label>
-        <input type="email" id="loginEmail" placeholder="your@email.com" onkeydown="if(event.key==='Enter')doLogin()">
+        <input type="text" id="loginEmail" placeholder="your@email.com" onkeydown="if(event.key==='Enter')doLogin()">
       </div>
       <div class="form-group">
         <label>Password</label>
         <input type="password" id="loginPassword" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
       </div>
-      <button class="auth-btn" onclick="doLogin()">Login</button>
+      <button type="button" class="auth-btn" onclick="doLogin()">Login</button>
     </div>
 
     <!-- REGISTER FORM -->
     <div id="registerForm" style="display:none">
-      <div class="form-group">
-        <label>Full Name</label>
-        <input type="text" id="regName" placeholder="Dr. Your Name">
+      <!-- Step 1: Details -->
+      <div id="regStep1">
+        <div class="auth-info">📧 Only <b>@hkbk.edu.in</b> email addresses are allowed</div>
+        <div class="form-group">
+          <label>Full Name</label>
+          <input type="text" id="regName" placeholder="e.g. Dr. Tabassum Ara">
+        </div>
+        <div class="form-group">
+          <label>HKBK Email</label>
+          <input type="text" id="regEmail" placeholder="yourname@hkbk.edu.in">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="regPassword" placeholder="At least 6 characters">
+        </div>
+        <button type="button" class="auth-btn" id="sendOtpBtn" onclick="sendOTP()">Send Verification Code</button>
       </div>
-      <div class="form-group">
-        <label>Email</label>
-        <input type="email" id="regEmail" placeholder="your@email.com">
+      <!-- Step 2: OTP -->
+      <div id="regStep2" style="display:none">
+        <div style="text-align:center;margin-bottom:16px">
+          <div style="font-size:36px">📧</div>
+          <p style="color:#aaa;font-size:13px;margin-top:8px">Verification code sent to<br><b id="otpEmailDisplay" style="color:#fff"></b></p>
+        </div>
+        <div class="form-group">
+          <label>Enter 6-Digit Code</label>
+          <input type="text" id="otpInput" placeholder="Enter code from your email" maxlength="6"
+            style="text-align:center;font-size:22px;letter-spacing:8px;font-weight:700"
+            onkeydown="if(event.key==='Enter')verifyOTP()">
+        </div>
+        <button type="button" class="auth-btn" onclick="verifyOTP()">Verify & Create Account</button>
+        <button onclick="document.getElementById('regStep1').style.display='block';document.getElementById('regStep2').style.display='none'"
+          style="width:100%;background:none;border:none;color:#888;font-size:12px;margin-top:10px;cursor:pointer">
+          ← Change email / Resend code
+        </button>
       </div>
-      <div class="form-group">
-        <label>Password</label>
-        <input type="password" id="regPassword" placeholder="At least 6 characters">
-      </div>
-      <button class="auth-btn" onclick="doRegister()">Create Account</button>
     </div>
   </div>
 </div>
@@ -243,7 +265,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#0f0f0f;color:#fff;min-h
     <button class="hbtn outline" onclick="showMyVideos()">My Videos</button>
     <button class="hbtn outline" id="statsBtn" style="display:none" onclick="openStats()">📊 Stats</button>
     <button class="hbtn admin" id="adminBtn" style="display:none" onclick="openAdmin()">⚙️ Admin <span class="pending-badge" id="pendingBadge" style="display:none">0</span></button>
-    <button class="hbtn upload" onclick="openUpload()">⬆️ Upload</button>
+    <button class="hbtn upload" id="uploadNavBtn" onclick="openUpload()">⬆️ Upload</button>
     <button class="hbtn outline" onclick="doLogout()">Logout</button>
   </div>
 </div>
@@ -400,6 +422,12 @@ function enterApp(user) {
     document.getElementById('statsBtn').style.display = '';
     checkPending();
   }
+  // Hide Upload button for students (only faculty/admin can upload)
+  if (user.canUpload === false) {
+    document.getElementById('uploadNavBtn').style.display = 'none';
+  } else {
+    document.getElementById('uploadNavBtn').style.display = '';
+  }
   loadVideos(1);
 }
 
@@ -422,24 +450,42 @@ async function doLogin() {
   enterApp(res.user);
 }
 
-async function doRegister() {
+async function sendOTP() {
   const name     = document.getElementById('regName').value.trim();
   const email    = document.getElementById('regEmail').value.trim();
   const password = document.getElementById('regPassword').value;
   if (!name || !email || !password) return showAuthError('All fields required');
-  const res = await apiFetch('/api/register', 'POST', { name, email, password });
+  if (!email.toLowerCase().endsWith('@hkbk.edu.in')) return showAuthError('Only @hkbk.edu.in emails are allowed');
+
+  const btn = document.getElementById('sendOtpBtn');
+  btn.disabled = true; btn.textContent = 'Sending...';
+  const res = await apiFetch('/api/send-otp', 'POST', { name, email, password });
+  btn.disabled = false; btn.textContent = 'Send Verification Code';
+
   if (res.error) return showAuthError(res.error);
-  if (res.pending) {
-    // Show approval pending message — do not enter app
-    document.getElementById('authError').style.display = 'none';
-    document.getElementById('registerForm').innerHTML = `
-      <div style="text-align:center;padding:20px 0">
-        <div style="font-size:48px;margin-bottom:12px">⏳</div>
-        <h3 style="color:#81c784;margin-bottom:10px;font-size:16px">Registration Submitted!</h3>
-        <p style="color:#aaa;font-size:13px;line-height:1.7">Your account is awaiting admin approval.<br>You will be able to login once the admin approves your account.</p>
-      </div>`;
-    return;
-  }
+  document.getElementById('authError').style.display = 'none';
+  document.getElementById('otpEmailDisplay').textContent = email;
+  document.getElementById('regStep1').style.display = 'none';
+  document.getElementById('regStep2').style.display = 'block';
+}
+
+async function verifyOTP() {
+  const email = document.getElementById('regEmail').value.trim();
+  const otp   = document.getElementById('otpInput').value.trim();
+  if (!otp || otp.length !== 6) return showAuthError('Enter the 6-digit code');
+
+  const res = await apiFetch('/api/verify-otp', 'POST', { email, otp });
+  if (res.error) return showAuthError(res.error);
+
+  document.getElementById('authError').style.display = 'none';
+  const typeLabel = res.userType === 'student' ? '🎓 Student' : '👨‍🏫 Faculty';
+  document.getElementById('registerForm').innerHTML = `
+    <div style="text-align:center;padding:20px 0">
+      <div style="font-size:48px;margin-bottom:12px">✅</div>
+      <h3 style="color:#81c784;margin-bottom:8px;font-size:16px">Email Verified!</h3>
+      <p style="color:#aaa;font-size:13px;line-height:1.8">Account type detected: <b style="color:#90caf9">${typeLabel}</b><br>
+      Your account is awaiting admin approval.<br>You can login once the admin approves.</p>
+    </div>`;
 }
 
 async function doLogout() {
