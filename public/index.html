@@ -349,6 +349,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#0f0f0f;color:#fff;min-h
     <div class="admin-panel">
       <div class="admin-tabs">
         <button class="a-tab active" onclick="adminTab(this,'pending')">⏳ Pending Videos <span class="pending-badge" id="pendingBadge2">0</span></button>
+        <button class="a-tab" onclick="adminTab(this,'pending-users')">👤 Pending Users <span class="pending-badge" id="pendingUsersBadge" style="display:none">0</span></button>
         <button class="a-tab" onclick="adminTab(this,'users')">👥 All Users</button>
       </div>
       <div id="adminContent"></div>
@@ -425,9 +426,17 @@ async function doRegister() {
   if (!name || !email || !password) return showAuthError('All fields required');
   const res = await apiFetch('/api/register', 'POST', { name, email, password });
   if (res.error) return showAuthError(res.error);
-  authToken = res.token;
-  localStorage.setItem('hkbk_token', authToken);
-  enterApp(res.user);
+  if (res.pending) {
+    // Show approval pending message — do not enter app
+    document.getElementById('authError').style.display = 'none';
+    document.getElementById('registerForm').innerHTML = `
+      <div style="text-align:center;padding:20px 0">
+        <div style="font-size:48px;margin-bottom:12px">⏳</div>
+        <h3 style="color:#81c784;margin-bottom:10px;font-size:16px">Registration Submitted!</h3>
+        <p style="color:#aaa;font-size:13px;line-height:1.7">Your account is awaiting admin approval.<br>You will be able to login once the admin approves your account.</p>
+      </div>`;
+    return;
+  }
 }
 
 async function doLogout() {
@@ -517,10 +526,9 @@ function renderGrid(videos, showDelete = false) {
           </div>
         </div>
       </div>
-      ${(isAdmin || canDelete) ? `
+      ${isAdmin ? `
       <div class="card-actions">
-        ${isAdmin && isPending ? `<button class="act-btn act-approve" onclick="approveVideo('${v._id}',this)">✅ Approve</button><button class="act-btn act-reject" onclick="rejectVideo('${v._id}',this)">❌ Reject</button>` : ''}
-        ${canDelete && !isPending ? `<button class="act-btn act-delete" onclick="deleteVideo('${v._id}',this)">🗑 Delete</button>` : ''}
+        ${isPending ? `<button class="act-btn act-approve" onclick="approveVideo('${v._id}',this)">✅ Approve</button><button class="act-btn act-reject" onclick="rejectVideo('${v._id}',this)">❌ Reject</button>` : `<button class="act-btn act-delete" onclick="deleteVideo('${v._id}',this)">🗑 Delete</button>`}
       </div>` : ''}
     </div>`; }).join('');
 }
@@ -639,12 +647,27 @@ async function deleteVideo(id, btn) {
 }
 
 async function checkPending() {
-  const data = await apiFetch('/api/pending');
-  const count = (data.videos || []).length;
+  const [vidData, usrData] = await Promise.all([apiFetch('/api/pending'), apiFetch('/api/pending-users')]);
+  const vCount = (vidData.videos || []).length;
+  const uCount = (usrData || []).length;
   ['pendingBadge','pendingBadge2'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) { el.style.display = count > 0 ? 'inline-flex' : 'none'; el.textContent = count; }
+    if (el) { el.style.display = vCount > 0 ? 'inline-flex' : 'none'; el.textContent = vCount; }
   });
+  const uBadge = document.getElementById('pendingUsersBadge');
+  if (uBadge) { uBadge.style.display = uCount > 0 ? 'inline-flex' : 'none'; uBadge.textContent = uCount; }
+}
+
+async function approveUser(id, btn) {
+  const res = await apiFetch(`/api/users/${id}/approve`, 'POST');
+  if (res.success) { showToast('User approved — they can now login!'); btn.closest('tr').remove(); checkPending(); }
+  else showToast(res.error, true);
+}
+async function rejectUser(id, btn) {
+  if (!confirm('Reject and remove this user registration?')) return;
+  const res = await apiFetch(`/api/users/${id}`, 'DELETE');
+  if (res.success) { showToast('User rejected.'); btn.closest('tr').remove(); checkPending(); }
+  else showToast(res.error, true);
 }
 
 // ── STATS ─────────────────────────────────────────────────────
@@ -695,7 +718,23 @@ function adminTab(el, tab) {
 
 async function loadAdminTab(tab) {
   const content = document.getElementById('adminContent');
-  if (tab === 'pending') {
+  if (tab === 'pending-users') {
+    const users = await apiFetch('/api/pending-users');
+    const list  = users || [];
+    if (!list.length) { content.innerHTML = '<p style="color:#555;font-size:13px;padding:20px">No pending user registrations ✅</p>'; return; }
+    content.innerHTML = `<table class="user-table">
+      <thead><tr><th>Name</th><th>Email</th><th>Registered On</th><th>Actions</th></tr></thead>
+      <tbody>${list.map(u=>`<tr>
+        <td>${esc(u.name)}</td>
+        <td>${esc(u.email)}</td>
+        <td>${fmtDate(u.createdAt)}</td>
+        <td style="display:flex;gap:6px">
+          <button class="act-btn act-approve" onclick="approveUser('${u._id}',this)">✅ Approve</button>
+          <button class="act-btn act-reject" onclick="rejectUser('${u._id}',this)">❌ Reject</button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } else if (tab === 'pending') {
     const data = await apiFetch('/api/pending');
     const videos = data.videos || [];
     if (!videos.length) { content.innerHTML = '<p style="color:#555;font-size:13px;padding:20px">No pending videos — all caught up! ✅</p>'; return; }

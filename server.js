@@ -86,13 +86,11 @@ app.post('/api/register', (req, res) => {
 
   bcrypt.hash(password, 10, (err, hash) => {
     if (err) return res.status(500).json({ error: 'Server error' });
-    const user = { _id: uuidv4(), name: name.trim(), email: email.trim().toLowerCase(), password: hash, role: 'user', createdAt: new Date() };
+    const user = { _id: uuidv4(), name: name.trim(), email: email.trim().toLowerCase(), password: hash, role: 'user', status: 'pending', createdAt: new Date() };
     usersDB.insert(user, (e, newUser) => {
       if (e) return res.status(400).json({ error: 'Email already registered' });
-      const token = uuidv4();
-      sessionsDB.insert({ token, userId: newUser._id, createdAt: new Date() }, () => {
-        res.json({ success: true, token, user: { _id: newUser._id, name: newUser.name, email: newUser.email, role: newUser.role } });
-      });
+      // Do NOT create session — user must wait for admin approval
+      res.json({ success: true, pending: true, message: 'Registration successful! Your account is awaiting admin approval. You will be able to login once approved.' });
     });
   });
 });
@@ -106,6 +104,10 @@ app.post('/api/login', (req, res) => {
     if (err || !user) return res.status(401).json({ error: 'Invalid email or password' });
     bcrypt.compare(password, user.password, (e, match) => {
       if (!match) return res.status(401).json({ error: 'Invalid email or password' });
+      // Check if account is approved (admin accounts are always approved)
+      if (user.role !== 'admin' && user.status !== 'approved') {
+        return res.status(403).json({ error: 'Your account is pending admin approval. Please wait.' });
+      }
       const token = uuidv4();
       sessionsDB.insert({ token, userId: user._id, createdAt: new Date() }, () => {
         res.json({ success: true, token, user: { _id: user._id, name: user.name, email: user.email, role: user.role } });
@@ -130,11 +132,27 @@ app.get('/api/me', requireAuth, (req, res) => {
 app.get('/api/users', requireAdmin, (req, res) => {
   usersDB.find({}).sort({ createdAt: -1 }).exec((err, users) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(users.map(u => ({ _id: u._id, name: u.name, email: u.email, role: u.role, createdAt: u.createdAt })));
+    res.json(users.map(u => ({ _id: u._id, name: u.name, email: u.email, role: u.role, status: u.status || 'approved', createdAt: u.createdAt })));
   });
 });
 
-// Admin: delete user
+// Admin: get pending users
+app.get('/api/pending-users', requireAdmin, (req, res) => {
+  usersDB.find({ status: 'pending' }).sort({ createdAt: -1 }).exec((err, users) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(users.map(u => ({ _id: u._id, name: u.name, email: u.email, createdAt: u.createdAt })));
+  });
+});
+
+// Admin: approve user
+app.post('/api/users/:id/approve', requireAdmin, (req, res) => {
+  usersDB.update({ _id: req.params.id }, { $set: { status: 'approved' } }, {}, (err, n) => {
+    if (err || !n) return res.status(404).json({ error: 'User not found' });
+    res.json({ success: true });
+  });
+});
+
+// Admin: reject/delete user
 app.delete('/api/users/:id', requireAdmin, (req, res) => {
   if (req.params.id === req.user._id) return res.status(400).json({ error: 'Cannot delete yourself' });
   usersDB.remove({ _id: req.params.id }, {}, (err) => {
@@ -313,12 +331,10 @@ app.get('/api/stats', requireAuth, (req, res) => {
   });
 });
 
-// Delete video — admin can delete any, user can delete own
-app.delete('/api/videos/:id', requireAuth, (req, res) => {
+// Delete video — admin only
+app.delete('/api/videos/:id', requireAdmin, (req, res) => {
   videosDB.findOne({ _id: req.params.id }, (err, doc) => {
     if (err || !doc) return res.status(404).json({ error: 'Not found' });
-    if (req.user.role !== 'admin' && doc.uploaderId !== req.user._id)
-      return res.status(403).json({ error: 'Not allowed' });
     const filePath = path.join(__dirname, 'uploads/videos', doc.filename);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     videosDB.remove({ _id: req.params.id }, {}, (e) => {
