@@ -1,0 +1,5 @@
+node_modules/
+uploads/videos/
+data/*.db
+.env
+*.log
