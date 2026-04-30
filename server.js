@@ -223,8 +223,18 @@ app.post('/api/upload', requireAuth, upload.single('video'), (req, res) => {
 app.get('/api/videos', requireAuth, (req, res) => {
   const page   = parseInt(req.query.page  || 1);
   const limit  = parseInt(req.query.limit || 12);
-  const sort   = req.query.sort === 'popular' ? { views: -1 } : { uploadedAt: -1 };
+  const sortBy = req.query.sort;
+  const sort   = sortBy === 'popular' ? { views: -1 } : { uploadedAt: -1 };
   const filter = req.user.role === 'admin' ? {} : { status: 'approved' };
+
+  if (sortBy === 'all') {
+    // Return all videos, no pagination
+    videosDB.find(filter).sort({ uploadedAt: -1 }).exec((err, docs) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ videos: docs, total: docs.length, page: 1, pages: 1 });
+    });
+    return;
+  }
 
   videosDB.find(filter).sort(sort).skip((page - 1) * limit).limit(limit).exec((err, docs) => {
     if (err) return res.status(500).json({ error: err.message });
