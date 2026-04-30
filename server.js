@@ -104,8 +104,8 @@ app.post('/api/login', (req, res) => {
     if (err || !user) return res.status(401).json({ error: 'Invalid email or password' });
     bcrypt.compare(password, user.password, (e, match) => {
       if (!match) return res.status(401).json({ error: 'Invalid email or password' });
-      // Check if account is approved (admin accounts are always approved)
-      if (user.role !== 'admin' && user.status !== 'approved') {
+      // Check if account is approved (admin always passes; undefined status = legacy user = approved)
+      if (user.role !== 'admin' && user.status === 'pending') {
         return res.status(403).json({ error: 'Your account is pending admin approval. Please wait.' });
       }
       const token = uuidv4();

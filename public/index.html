@@ -241,7 +241,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#0f0f0f;color:#fff;min-h
       <span class="role" id="userRoleChip"></span>
     </div>
     <button class="hbtn outline" onclick="showMyVideos()">My Videos</button>
-    <button class="hbtn outline" onclick="openStats()">📊 Stats</button>
+    <button class="hbtn outline" id="statsBtn" style="display:none" onclick="openStats()">📊 Stats</button>
     <button class="hbtn admin" id="adminBtn" style="display:none" onclick="openAdmin()">⚙️ Admin <span class="pending-badge" id="pendingBadge" style="display:none">0</span></button>
     <button class="hbtn upload" onclick="openUpload()">⬆️ Upload</button>
     <button class="hbtn outline" onclick="doLogout()">Logout</button>
@@ -396,6 +396,7 @@ function enterApp(user) {
   document.getElementById('userRoleChip').textContent = user.role.toUpperCase();
   if (user.role === 'admin') {
     document.getElementById('adminBtn').style.display = '';
+    document.getElementById('statsBtn').style.display = '';
     checkPending();
   }
   loadVideos(1);
