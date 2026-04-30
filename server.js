@@ -331,6 +331,44 @@ app.get('/api/stats', requireAuth, (req, res) => {
   });
 });
 
+// User video statistics — per user upload details with dates
+app.get('/api/user-stats', requireAuth, (req, res) => {
+  const filter = req.user.role === 'admin' ? {} : { status: 'approved' };
+  videosDB.find(filter).sort({ uploadedAt: -1 }).exec((err, all) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    // Group videos by uploader
+    const userMap = {};
+    all.forEach(v => {
+      if (!userMap[v.uploader]) {
+        userMap[v.uploader] = {
+          name      : v.uploader,
+          uploaderId: v.uploaderId,
+          totalVideos: 0,
+          totalViews : 0,
+          totalLikes : 0,
+          videos     : []
+        };
+      }
+      userMap[v.uploader].totalVideos++;
+      userMap[v.uploader].totalViews  += v.views;
+      userMap[v.uploader].totalLikes  += v.likes;
+      userMap[v.uploader].videos.push({
+        _id       : v._id,
+        title     : v.title,
+        topic     : v.topic,
+        views     : v.views,
+        likes     : v.likes,
+        status    : v.status,
+        uploadedAt: v.uploadedAt
+      });
+    });
+
+    const result = Object.values(userMap).sort((a, b) => b.totalVideos - a.totalVideos);
+    res.json(result);
+  });
+});
+
 // Delete video — admin only
 app.delete('/api/videos/:id', requireAdmin, (req, res) => {
   videosDB.findOne({ _id: req.params.id }, (err, doc) => {
