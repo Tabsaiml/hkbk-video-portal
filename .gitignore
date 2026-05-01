@@ -4,4 +4,3 @@ data/*.db
 .env
 *.log
 client/node_modules/
-public/

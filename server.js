@@ -558,6 +558,11 @@ app.get('/api/my-videos', requireAuth, (req, res) => {
   });
 });
 
+// Serve React app for all non-API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.listen(PORT, () => {
   console.log(`\n🎬 HKBK Video Library running at http://localhost:${PORT}\n`);
 });
