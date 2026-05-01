@@ -26,7 +26,7 @@ export default function App() {
 
   function onLogin(token, userData) {
     setToken(token)
-    setUser(userData)
+    setUser({ canUpload: true, userType: 'faculty', ...userData })
   }
 
   function onLogout() {
