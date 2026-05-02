@@ -37,10 +37,11 @@ const transporter = nodemailer.createTransport({
 });
 
 // ── Databases ────────────────────────────────────────────────────
-const videosDB  = new Datastore({ filename: './data/videos.db',  autoload: true });
-const usersDB   = new Datastore({ filename: './data/users.db',   autoload: true });
-const sessionsDB = new Datastore({ filename: './data/sessions.db', autoload: true });
-const otpDB     = new Datastore({ filename: './data/otps.db',    autoload: true });
+const DB = f => path.join(__dirname, 'data', f);
+const videosDB  = new Datastore({ filename: DB('videos.db'),   autoload: true });
+const usersDB   = new Datastore({ filename: DB('users.db'),    autoload: true });
+const sessionsDB = new Datastore({ filename: DB('sessions.db'), autoload: true });
+const otpDB     = new Datastore({ filename: DB('otps.db'),     autoload: true });
 
 usersDB.ensureIndex({ fieldName: 'email', unique: true });
 
@@ -56,7 +57,7 @@ usersDB.findOne({ role: 'admin' }, (err, doc) => {
 
 // ── Multer ───────────────────────────────────────────────────────
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, './uploads/videos/'),
+  destination: (req, file, cb) => cb(null, path.join(__dirname, 'uploads', 'videos')),
   filename:    (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname))
 });
 const upload = multer({
@@ -71,7 +72,16 @@ const upload = multer({
 // ── Middleware ────────────────────────────────────────────────────
 app.use(express.json());
 app.use((req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ── Public counts (no auth needed) ───────────────────────────────
+app.get('/api/counts', (req, res) => {
+  usersDB.count({ role: { $ne: 'admin' } }, (e1, userCount) => {
+    videosDB.count({}, (e2, videoCount) => {
+      res.json({ users: userCount || 0, videos: videoCount || 0 });
+    });
+  });
+});
 
 // ── Auth helpers ─────────────────────────────────────────────────
 function getSession(req, cb) {
